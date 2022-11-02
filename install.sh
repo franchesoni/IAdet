@@ -1,5 +1,5 @@
 pip install --upgrade pip
-pip3 install torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
+pip3 install torch torchvision # --extra-index-url https://download.pytorch.org/whl/cpu
 pip install -U openmim
 mim install mmengine
 mim install "mmcv>=2.0.0rc1"
