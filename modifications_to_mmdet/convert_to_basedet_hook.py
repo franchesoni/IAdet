@@ -9,12 +9,15 @@ from mmengine import load, dump
 def iadet2mmdet(annotations_iadet: dict) -> list[dict]:
     """Converts from iadet format (dict of dicts) to iadet format (list of dicts).
     Allows for more operation with mmdetection."""
-    return {"metainfo":{}, "data_list":list(annotations_iadet.values())}
+    return {"metainfo":{"CLASSES":["single"]}, "data_list":list(annotations_iadet.values())}
 
 
 
 @HOOKS.register_module()
 class ConvertToBaseDetHook(Hook):
+    def before_train(self, runner: Runner):
+        self.before_train_epoch(runner)
+
     def before_train_epoch(self,
                          runner: Runner,
                          ):
@@ -31,4 +34,5 @@ class ConvertToBaseDetHook(Hook):
         anniadet = load(in_path)
         annmmdet = iadet2mmdet(anniadet)
         dump(annmmdet, out_path)
+        runner.logger.info("Converting file")
 

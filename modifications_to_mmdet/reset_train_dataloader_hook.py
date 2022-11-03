@@ -18,4 +18,4 @@ class ResetTrainDataloaderHook(Hook):
             'diff_rank_seed', False)
         runner.train_loop.dataloader = runner.build_dataloader(
             runner._train_dataloader, seed=runner.seed, diff_rank_seed=diff_rank_seed)
-        breakpoint()
+        runner.logger.info("Reset dataloader")

@@ -8,11 +8,10 @@ _base_ = [
 
 custom_hooks=[
   dict(
-  type="CheckInvalidLossHook"
-),
-  dict(
   type="ConvertToBaseDetHook", priority="ABOVE_NORMAL"
 ),
   dict(
   type="ResetTrainDataloaderHook", priority="BELOW_NORMAL"
 )]
+
+checkpoint_config = dict(max_keep_ckpts = 1)
