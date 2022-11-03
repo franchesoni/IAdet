@@ -1,8 +1,5 @@
-import json
-import time
-
+import glob
 import os.path
-from pathlib import Path
 import PIL.Image
 from PIL import ImageTk
 from tkinter import (
@@ -18,6 +15,9 @@ from tkinter import (
     W,
 )
 from mmengine import load, dump
+from mmdet.apis import init_detector, inference_detector
+from mmdet.utils import register_all_modules
+
 
 
 def show_help(*args):
@@ -109,7 +109,27 @@ class IAdetApp(Frame):
         self.bboxes_ids = []
         # initialize
         filename = self.load_new_image()
+        self.ckpt_loadtime = 0
         self.load_bboxes(filename, self.im_ind)
+        register_all_modules()
+        self.check_for_and_load_model()
+
+    def check_for_and_load_model(self):
+        config_name = "faster_iadet"
+        ckpt_path = sorted(glob.glob(f"work_dirs/{config_name}/epoch_*.pth"))[-1]
+        if not os.path.isfile(ckpt_path):
+            return
+        mtime = os.path.getmtime(ckpt_path)
+        if self.ckpt_loadtime < mtime:
+            # load model as in https://mmdetection.readthedocs.io/en/3.x/user_guides/inference.html
+            config_file = f"work_dirs/{config_name}/{config_name}.py"
+            print("Loading new model")
+            self.model = init_detector(config_file, ckpt_path)
+            self.ckpt_loadtime = mtime
+
+
+
+
 
     @staticmethod
     def load_initial_annotations_iadet(
@@ -158,6 +178,7 @@ class IAdetApp(Frame):
         filename = self.load_new_image()
         self.dump_annotations()
         self.load_bboxes(filename, self.im_ind)
+        self.check_for_and_load_model()
 
     def next(self, event):
         self.update_annotations(
@@ -169,6 +190,7 @@ class IAdetApp(Frame):
         filename = self.load_new_image()
         self.dump_annotations()
         self.load_bboxes(filename, self.im_ind)
+        self.check_for_and_load_model()
 
     def update_text(self):
         text = "\n".join(
@@ -205,11 +227,10 @@ class IAdetApp(Frame):
             bboxes = self.scale_bboxes(bboxes, mode="load")
             color = "black"
         else:
-            # raise NotImplementedError(
-            #     "Here we should predict bounding boxes with the model"
-            # )
-            # assert scaled, "Check for bounding box correct scaling"
-            bboxes = []
+            if 0 < self.ckpt_loadtime:  # there is a loaded model
+                bboxes = [list(t) for t in inference_detector(self.model, filename).pred_instances.bboxes]
+            else:
+                bboxes = []
             color = "green"
         self.draw_bboxes(bboxes, color=color)
 
