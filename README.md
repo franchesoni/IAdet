@@ -5,13 +5,18 @@ Object detection is all about bounding boxes. The IAdet tool enables users to te
 
 ## Installation
 
-python -m venv env_iadet
-source env_iadet/bin/activate
-bash install.sh
-
 1. Clone the repo
-2. `pip install -r requirements.txt` in your environment with Python 3.10
-3. `python IAdet.py`
+2. With Python 3.10 run:
+  ```
+  python -m venv env_iadet
+  source env_iadet/bin/activate
+  bash install.sh  # installing mmcv might take a long time
+  ```
+
+## Usage
+```
+bash launch.sh DATA_DIR
+```
 
 ## Cite
 If you find this project useful, cite our work:
