@@ -14,4 +14,5 @@ custom_hooks=[
   type="ResetTrainDataloaderHook", priority="BELOW_NORMAL"
 )]
 
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=10000, val_interval=20000)
 checkpoint_config = dict(max_keep_ckpts = 1)
