@@ -116,6 +116,7 @@
         <button id="prevBtn">◀ Previous</button>
         <button id="nextBtn">Next ▶</button>
         <button id="clearBtn">Clear All</button>
+        <button id="undoBtn">Undo</button>
         <button id="resetViewBtn">Reset View</button>
         <span id="imageInfo" style="margin: 0 20px; line-height: 32px;"></span>
     </div>
@@ -153,6 +154,7 @@
                 this.image = new Image();
                 this.currentData = null;
                 this.bboxes = [];
+                this.bboxesHistory = [];
                 this.firstClick = null;
                 this.currentBox = null;
                 
@@ -181,6 +183,7 @@
                 document.getElementById('prevBtn').addEventListener('click', () => this.navigate('prev'));
                 document.getElementById('nextBtn').addEventListener('click', () => this.navigate('next'));
                 document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
+                document.getElementById('undoBtn').addEventListener('click', () => this.undo());
                 document.getElementById('resetViewBtn').addEventListener('click', () => {
                     this.resetView();
                     this.redraw();
@@ -188,10 +191,13 @@
 
                 // Keyboard events
                 document.addEventListener('keydown', (e) => {
+                    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+                        e.preventDefault();
+                        this.undo();
+                    }
                     if (e.key === 'ArrowLeft') this.navigate('prev');
                     if (e.key === 'ArrowRight') this.navigate('next');
                     if (e.key === 'Delete' || e.key === 'Backspace') this.clearAll();
-                    // Remove Ctrl+S save shortcut, not needed
                 });
 
                 // Canvas events
@@ -225,6 +231,9 @@
                     this.bboxes = this.currentData.ann_bboxes.length > 0 
                         ? [...this.currentData.ann_bboxes]
                         : [...this.currentData.pred_bboxes];
+
+                    // Clear undo history for new image
+                    this.bboxesHistory = [];
 
                     // Update UI
                     this.updateUI();
@@ -471,6 +480,7 @@
                         const bottom = Math.max(this.firstClick.y, imageY);
                         // Only add if box has meaningful size
                         if (right - left > 5 && bottom - top > 5) {
+                            this.pushHistory();
                             this.bboxes.push([Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)]);
                             this.updateBboxInfo();
                         }
@@ -526,6 +536,7 @@
                     }
                 }
                 if (minIdx !== -1) {
+                    this.pushHistory();
                     this.bboxes.splice(minIdx, 1);
                     this.redraw();
                     this.updateBboxInfo();
@@ -568,7 +579,23 @@
                 }
             }
 
+            pushHistory() {
+                // Save a deep copy of the current bboxes
+                this.bboxesHistory.push(JSON.parse(JSON.stringify(this.bboxes)));
+                // Limit history size if desired (optional)
+                if (this.bboxesHistory.length > 50) this.bboxesHistory.shift();
+            }
+
+            undo() {
+                if (this.bboxesHistory.length > 0) {
+                    this.bboxes = this.bboxesHistory.pop();
+                    this.redraw();
+                    this.updateBboxInfo();
+                }
+            }
+
             clearAll() {
+                if (this.bboxes.length > 0) this.pushHistory();
                 this.bboxes = [];
                 this.redraw();
                 this.updateBboxInfo();
