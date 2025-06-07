@@ -164,6 +164,9 @@
                 this.lastX = 0;
                 this.lastY = 0;
                 
+                // Crosshair state
+                this.crosshair = { x: null, y: null };
+                
                 this.setupEventListeners();
                 this.loadCurrentImage();
             }
@@ -190,6 +193,7 @@
                 this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
                 this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
                 this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
+                this.canvas.addEventListener('mouseout', (e) => this.onMouseOut(e));
                 this.canvas.addEventListener('contextmenu', (e) => this.onRightClick(e));
                 this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
                 
@@ -268,6 +272,28 @@
                 this.drawBboxes();
                 
                 this.ctx.restore();
+                
+                // Draw crosshair (after restoring transform)
+                this.drawCrosshair();
+            }
+
+            drawCrosshair() {
+                if (this.crosshair.x === null || this.crosshair.y === null) return;
+                const ctx = this.ctx;
+                ctx.save();
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.lineWidth = 1;
+                // Draw vertical line
+                ctx.beginPath();
+                ctx.moveTo(this.crosshair.x, 0);
+                ctx.lineTo(this.crosshair.x, this.canvas.height);
+                ctx.stroke();
+                // Draw horizontal line
+                ctx.beginPath();
+                ctx.moveTo(0, this.crosshair.y);
+                ctx.lineTo(this.canvas.width, this.crosshair.y);
+                ctx.stroke();
+                ctx.restore();
             }
 
             drawBboxes() {
@@ -354,6 +380,9 @@
                 const scaleY = this.canvas.height / rect.height;
                 const canvasX = (e.clientX - rect.left) * scaleX;
                 const canvasY = (e.clientY - rect.top) * scaleY;
+                // Update crosshair position
+                this.crosshair.x = canvasX;
+                this.crosshair.y = canvasY;
                 const moveDist = Math.hypot(canvasX - this.mouseDownX, canvasY - this.mouseDownY);
                 const DRAG_THRESHOLD = 5;
                 if (this.maybeClick && moveDist > DRAG_THRESHOLD) {
@@ -381,6 +410,8 @@
                     const bottom = Math.max(this.firstClick.y, imageY);
                     this.currentBox = [Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)];
                     this.redraw();
+                } else {
+                    this.redraw(); // Always redraw to update crosshair
                 }
             }
             
