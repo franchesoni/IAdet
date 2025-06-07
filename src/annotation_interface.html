@@ -127,6 +127,8 @@
     <div class="info">
         <div id="status" class="status"></div>
         <div id="bboxInfo" class="bbox-info"></div>
+        <div id="cursorInfo" class="bbox-info"></div>
+        <div id="imageSizeInfo" class="bbox-info"></div>
     </div>
 
     <div class="help">
@@ -166,6 +168,9 @@
                 
                 // Crosshair state
                 this.crosshair = { x: null, y: null };
+                
+                // Cursor position in image coordinates
+                this.cursorImagePos = { x: null, y: null };
                 
                 this.setupEventListeners();
                 this.loadCurrentImage();
@@ -243,6 +248,7 @@
                 
                 // Draw image and bounding boxes
                 this.redraw();
+                this.updateImageSizeInfo();
             }
             
             resetView() {
@@ -383,6 +389,19 @@
                 // Update crosshair position
                 this.crosshair.x = canvasX;
                 this.crosshair.y = canvasY;
+                // Update image coordinates for cursor
+                const imageX = (canvasX - this.translateX) / this.scale;
+                const imageY = (canvasY - this.translateY) / this.scale;
+                if (
+                    imageX >= 0 && imageX <= this.image.width &&
+                    imageY >= 0 && imageY <= this.image.height
+                ) {
+                    this.cursorImagePos.x = Math.round(imageX);
+                    this.cursorImagePos.y = Math.round(imageY);
+                } else {
+                    this.cursorImagePos.x = null;
+                    this.cursorImagePos.y = null;
+                }
                 const moveDist = Math.hypot(canvasX - this.mouseDownX, canvasY - this.mouseDownY);
                 const DRAG_THRESHOLD = 5;
                 if (this.maybeClick && moveDist > DRAG_THRESHOLD) {
@@ -413,6 +432,7 @@
                 } else {
                     this.redraw(); // Always redraw to update crosshair
                 }
+                this.updateCursorInfo();
             }
             
             onMouseUp(e) {
@@ -570,6 +590,24 @@
             updateBboxInfo() {
                 const bboxInfo = document.getElementById('bboxInfo');
                 bboxInfo.textContent = `Bounding boxes: ${this.bboxes.length}`;
+            }
+
+            updateCursorInfo() {
+                const el = document.getElementById('cursorInfo');
+                if (this.cursorImagePos.x !== null && this.cursorImagePos.y !== null) {
+                    el.textContent = `Cursor (image coords): (${this.cursorImagePos.x}, ${this.cursorImagePos.y})`;
+                } else {
+                    el.textContent = '';
+                }
+            }
+
+            updateImageSizeInfo() {
+                const el = document.getElementById('imageSizeInfo');
+                if (this.image && this.image.width && this.image.height) {
+                    el.textContent = `Image size: ${this.image.width} x ${this.image.height}`;
+                } else {
+                    el.textContent = '';
+                }
             }
         }
 
