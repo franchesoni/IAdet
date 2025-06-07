@@ -1,3 +1,4 @@
+# PLEASE USE THE APP EN SRC, all below is deprecated
 
 # IAdet : The ultimate annotation tool for object detection
 
@@ -15,7 +16,7 @@ Object detection is all about bounding boxes. The IAdet tool enables users to te
 
 ## Usage
 ```
-bash launch.sh DATA_DIR
+bash launch.sh ANN_PATH
 ```
 
 ## Cite
@@ -28,8 +29,27 @@ If you find this project useful, cite our work:
   year={2022}
 }
 ```
-or check out the paper's code here: https://github.com/franchesoni/iadet_paper
 
-## Future 
-- Include semi-supervised learning https://mmdetection.readthedocs.io/en/v3.0.0rc0/user_guides/semi_det.html#configure-meanteacherhook
-- Make GUI show the images in the center of the region (resize accroding to max width max depth)
+
+## How it works
+
+1. The app depends on `annotations.json`, a file that has a list of bounding boxes for each filename. JSON schema (what we expect the elements to be):
+```
+{"filepath":"img_000123.jpg",
+ "pred_bboxes":[/* may stay after annotation */],
+ "ann_bboxes":[[left, top, right, bottom]],
+ "state":"predicted"          // one of ["unseen", "predicted", "annotated"] 
+}
+ ```
+
+
+
+The bounding boxes for one image are saved on this file whenever you leave the image. A model is trained on the background based on the annotations in this file. If prefetching an unlabeled image, the last checkpoint of the model is used to predict the bounding boxes for that image. These predictions are saved into `tmp.json` and are discarded when the annotations of an image are saved. 
+
+2. when you annotate, there are 5 things you can do:
+  - move to the next/previous image saving current annotations as correct: this means that **any time you leave the annotations should be correct**
+  - remove all bounding boxes by pressing the `Remove All` button
+  - add a bounding box by making two left clicks
+  - remove a bounding box with one right click
+
+
