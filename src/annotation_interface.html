@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IAdet Annotation Tool</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            background-color: #333;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background-color: #555;
+        }
+
+        button:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+        }
+
+        .image-container {
+            position: relative;
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #222;
+            width: 90vw;
+            height: 70vh;
+            max-width: 1200px;
+            max-height: 800px;
+        }
+
+        #canvas {
+            display: block;
+            cursor: crosshair;
+            width: 100%;
+            height: 100%;
+        }
+
+        .info {
+            margin-top: 20px;
+            text-align: center;
+            background-color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            min-width: 300px;
+        }
+
+        .bbox-info {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #ccc;
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        .status.unseen { background-color: #666; }
+        .status.predicted { background-color: #664400; }
+        .status.annotated { background-color: #006600; }
+
+        .help {
+            margin-top: 20px;
+            background-color: #333;
+            padding: 15px;
+            border-radius: 4px;
+            max-width: 600px;
+            text-align: left;
+            font-size: 12px;
+        }
+
+        .help h3 {
+            margin-top: 0;
+            color: #fff;
+        }
+
+        .help ul {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <button id="prevBtn">◀ Previous</button>
+        <button id="nextBtn">Next ▶</button>
+        <button id="clearBtn">Clear All</button>
+        <button id="resetViewBtn">Reset View</button>
+        <span id="imageInfo" style="margin: 0 20px; line-height: 32px;"></span>
+    </div>
+
+    <div class="image-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="info">
+        <div id="status" class="status"></div>
+        <div id="bboxInfo" class="bbox-info"></div>
+    </div>
+
+    <div class="help">
+        <h3>How to use:</h3>
+        <ul>
+            <li><strong>Add bounding box:</strong> Two left clicks to define corners</li>
+            <li><strong>Remove bounding box:</strong> Right-click near a box center (removes the closest one)</li>
+            <li><strong>Pan:</strong> Middle-click drag, or Ctrl+drag, or Shift+drag</li>
+            <li><strong>Zoom:</strong> Mouse wheel</li>
+            <li><strong>Navigate:</strong> Use Previous/Next buttons or arrow keys</li>
+            <li><strong>Clear all:</strong> Remove all bounding boxes</li>
+            <li><strong>Reset view:</strong> Fit image to canvas</li>
+        </ul>
+        <p><strong>Note:</strong> Annotations are automatically saved when you navigate to another image.</p>
+    </div>
+
+    <script>
+        class AnnotationTool {
+            constructor() {
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.image = new Image();
+                this.currentData = null;
+                this.bboxes = [];
+                this.firstClick = null;
+                this.currentBox = null;
+                
+                // Transform variables
+                this.translateX = 0;
+                this.translateY = 0;
+                this.scale = 1;
+                
+                // Interaction variables
+                this.dragging = false;
+                this.lastX = 0;
+                this.lastY = 0;
+                
+                this.setupEventListeners();
+                this.loadCurrentImage();
+            }
+
+            setupEventListeners() {
+                // Button events
+                document.getElementById('prevBtn').addEventListener('click', () => this.navigate('prev'));
+                document.getElementById('nextBtn').addEventListener('click', () => this.navigate('next'));
+                document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
+                document.getElementById('resetViewBtn').addEventListener('click', () => {
+                    this.resetView();
+                    this.redraw();
+                });
+
+                // Keyboard events
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'ArrowLeft') this.navigate('prev');
+                    if (e.key === 'ArrowRight') this.navigate('next');
+                    if (e.key === 'Delete' || e.key === 'Backspace') this.clearAll();
+                    // Remove Ctrl+S save shortcut, not needed
+                });
+
+                // Canvas events
+                this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+                this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+                this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
+                this.canvas.addEventListener('contextmenu', (e) => this.onRightClick(e));
+                this.canvas.addEventListener('wheel', (e) => this.onWheel(e));
+                
+                // Global mouseup to stop dragging (any button)
+                window.addEventListener('mouseup', (e) => {
+                    this.dragging = false;
+                });
+
+                // Image load event
+                this.image.onload = () => this.onImageLoad();
+            }
+
+            async loadCurrentImage() {
+                try {
+                    const response = await fetch('/api/current');
+                    this.currentData = await response.json();
+                    
+                    if (this.currentData.error) {
+                        console.error('Error loading image:', this.currentData.error);
+                        return;
+                    }
+
+                    // Load bounding boxes (prefer annotated over predicted)
+                    this.bboxes = this.currentData.ann_bboxes.length > 0 
+                        ? [...this.currentData.ann_bboxes]
+                        : [...this.currentData.pred_bboxes];
+
+                    // Update UI
+                    this.updateUI();
+                    
+                    // Load image
+                    this.image.src = '/api/image?' + Date.now(); // Cache bust
+                    
+                } catch (error) {
+                    console.error('Error loading current image:', error);
+                }
+            }
+
+            onImageLoad() {
+                // Set canvas size to match container
+                const container = this.canvas.parentElement;
+                this.canvas.width = container.clientWidth;
+                this.canvas.height = container.clientHeight;
+                
+                // Reset view transformation
+                this.resetView();
+                
+                // Draw image and bounding boxes
+                this.redraw();
+            }
+            
+            resetView() {
+                // Calculate scale to fit image in canvas
+                const scaleX = this.canvas.width / this.image.width;
+                const scaleY = this.canvas.height / this.image.height;
+                this.scale = Math.min(scaleX, scaleY, 1); // Don't scale up
+                
+                // Center the image
+                this.translateX = (this.canvas.width - this.image.width * this.scale) / 2;
+                this.translateY = (this.canvas.height - this.image.height * this.scale) / 2;
+            }
+
+            redraw() {
+                // Clear canvas
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Apply transformation
+                this.ctx.save();
+                this.ctx.translate(this.translateX, this.translateY);
+                this.ctx.scale(this.scale, this.scale);
+                
+                // Draw image
+                this.ctx.drawImage(this.image, 0, 0);
+                
+                // Draw bounding boxes
+                this.drawBboxes();
+                
+                this.ctx.restore();
+            }
+
+            drawBboxes() {
+                this.ctx.strokeStyle = '#00ff00';
+                this.ctx.lineWidth = 2;
+                this.ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+
+                for (const bbox of this.bboxes) {
+                    const [left, top, right, bottom] = bbox;
+                    const width = right - left;
+                    const height = bottom - top;
+                    this.ctx.fillRect(left, top, width, height);
+                    this.ctx.strokeRect(left, top, width, height);
+                    // Draw bbox center very lightly
+                    const cx = (left + right) / 2;
+                    const cy = (top + bottom) / 2;
+                    this.ctx.save();
+                    this.ctx.globalAlpha = 0.2;
+                    this.ctx.beginPath();
+                    this.ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
+                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.fill();
+                    this.ctx.restore();
+                }
+
+                // Draw current box being drawn
+                if (this.currentBox) {
+                    this.ctx.strokeStyle = '#ffff00';
+                    this.ctx.fillStyle = 'rgba(255, 255, 0, 0.1)';
+                    const [left, top, right, bottom] = this.currentBox;
+                    const width = right - left;
+                    const height = bottom - top;
+                    this.ctx.fillRect(left, top, width, height);
+                    this.ctx.strokeRect(left, top, width, height);
+                }
+            }
+
+            getMousePos(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = this.canvas.width / rect.width;
+                const scaleY = this.canvas.height / rect.height;
+                
+                const canvasX = (e.clientX - rect.left) * scaleX;
+                const canvasY = (e.clientY - rect.top) * scaleY;
+                
+                // Convert to image coordinates
+                const imageX = (canvasX - this.translateX) / this.scale;
+                const imageY = (canvasY - this.translateY) / this.scale;
+                
+                return {
+                    x: imageX,
+                    y: imageY,
+                    canvasX: canvasX,
+                    canvasY: canvasY
+                };
+            }
+            
+            onMouseDown(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = this.canvas.width / rect.width;
+                const scaleY = this.canvas.height / rect.height;
+                this.mouseDownX = (e.clientX - rect.left) * scaleX;
+                this.mouseDownY = (e.clientY - rect.top) * scaleY;
+                this.dragging = false;
+                this.maybeClick = false;
+                this.movedEnough = false;
+                if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.shiftKey))) {
+                    // Middle or ctrl/shift+left: always pan
+                    this.dragging = true;
+                    this.lastX = this.mouseDownX;
+                    this.lastY = this.mouseDownY;
+                    e.preventDefault();
+                } else if (e.button === 0) {
+                    // Left: could be click or drag
+                    this.maybeClick = true;
+                    this.lastX = this.mouseDownX;
+                    this.lastY = this.mouseDownY;
+                }
+            }
+            
+            onMouseMove(e) {
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = this.canvas.width / rect.width;
+                const scaleY = this.canvas.height / rect.height;
+                const canvasX = (e.clientX - rect.left) * scaleX;
+                const canvasY = (e.clientY - rect.top) * scaleY;
+                const moveDist = Math.hypot(canvasX - this.mouseDownX, canvasY - this.mouseDownY);
+                const DRAG_THRESHOLD = 5;
+                if (this.maybeClick && moveDist > DRAG_THRESHOLD) {
+                    this.dragging = true;
+                    this.movedEnough = true;
+                }
+                if (this.dragging) {
+                    // Handle canvas dragging
+                    const dx = canvasX - this.lastX;
+                    const dy = canvasY - this.lastY;
+                    this.translateX += dx;
+                    this.translateY += dy;
+                    this.lastX = canvasX;
+                    this.lastY = canvasY;
+                    this.redraw();
+                    return;
+                }
+                // Handle bbox preview during drawing
+                if (this.firstClick) {
+                    const imageX = (canvasX - this.translateX) / this.scale;
+                    const imageY = (canvasY - this.translateY) / this.scale;
+                    const left = Math.min(this.firstClick.x, imageX);
+                    const top = Math.min(this.firstClick.y, imageY);
+                    const right = Math.max(this.firstClick.x, imageX);
+                    const bottom = Math.max(this.firstClick.y, imageY);
+                    this.currentBox = [Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)];
+                    this.redraw();
+                }
+            }
+            
+            onMouseUp(e) {
+                if (e.button === 0) {
+                    if (this.dragging && this.movedEnough) {
+                        // End pan
+                        this.dragging = false;
+                        this.maybeClick = false;
+                        this.movedEnough = false;
+                        return;
+                    }
+                    // If not a drag, treat as click for bbox
+                    const rect = this.canvas.getBoundingClientRect();
+                    const scaleX = this.canvas.width / rect.width;
+                    const scaleY = this.canvas.height / rect.height;
+                    const canvasX = (e.clientX - rect.left) * scaleX;
+                    const canvasY = (e.clientY - rect.top) * scaleY;
+                    // Convert to image coordinates
+                    const imageX = (canvasX - this.translateX) / this.scale;
+                    const imageY = (canvasY - this.translateY) / this.scale;
+                    // Check if click is within image bounds
+                    if (imageX < 0 || imageX > this.image.width || imageY < 0 || imageY > this.image.height) {
+                        this.maybeClick = false;
+                        this.movedEnough = false;
+                        return;
+                    }
+                    if (!this.firstClick) {
+                        // First click - start drawing
+                        this.firstClick = { x: imageX, y: imageY };
+                        this.currentBox = null;
+                    } else {
+                        // Second click - finish box
+                        const left = Math.min(this.firstClick.x, imageX);
+                        const top = Math.min(this.firstClick.y, imageY);
+                        const right = Math.max(this.firstClick.x, imageX);
+                        const bottom = Math.max(this.firstClick.y, imageY);
+                        // Only add if box has meaningful size
+                        if (right - left > 5 && bottom - top > 5) {
+                            this.bboxes.push([Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)]);
+                            this.updateBboxInfo();
+                        }
+                        // Reset for next box
+                        this.firstClick = null;
+                        this.currentBox = null;
+                        this.redraw();
+                    }
+                    this.maybeClick = false;
+                    this.movedEnough = false;
+                }
+            }
+            
+            onWheel(e) {
+                e.preventDefault();
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = this.canvas.width / rect.width;
+                const scaleY = this.canvas.height / rect.height;
+                const canvasX = (e.clientX - rect.left) * scaleX;
+                const canvasY = (e.clientY - rect.top) * scaleY;
+                
+                const zoomSpeed = 0.1;
+                const delta = -Math.sign(e.deltaY) * zoomSpeed;
+                const zoomFactor = Math.exp(delta);
+                this.scale *= zoomFactor;
+
+                this.translateX = (this.translateX - canvasX) * zoomFactor + canvasX;
+                this.translateY = (this.translateY - canvasY) * zoomFactor + canvasY;
+                this.redraw();
+            }
+
+            onRightClick(e) {
+                e.preventDefault();
+                
+                const pos = this.getMousePos(e);
+                if (this.bboxes.length === 0) return;
+                let minDist = Infinity;
+                let minIdx = -1;
+                for (let i = 0; i < this.bboxes.length; i++) {
+                    const [left, top, right, bottom] = this.bboxes[i];
+                    const cx = (left + right) / 2;
+                    const cy = (top + bottom) / 2;
+                    const w = Math.max(1, right - left);
+                    const h = Math.max(1, bottom - top);
+                    // Mahalanobis distance: sqrt( ((x-cx)/w)^2 + ((y-cy)/h)^2 )
+                    const dx = (pos.x - cx) / w;
+                    const dy = (pos.y - cy) / h;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        minIdx = i;
+                    }
+                }
+                if (minIdx !== -1) {
+                    this.bboxes.splice(minIdx, 1);
+                    this.redraw();
+                    this.updateBboxInfo();
+                }
+            }
+
+            async navigate(direction) {
+                // Auto-save before navigation
+                await this.save(false);
+                
+                try {
+                    const response = await fetch('/api/navigate', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({direction})
+                    });
+                    
+                    const result = await response.json();
+                    if (result.error) {
+                        console.error('Navigation error:', result.error);
+                        return;
+                    }
+                    
+                    await this.loadCurrentImage();
+                } catch (error) {
+                    console.error('Error navigating:', error);
+                }
+            }
+
+            async save() {
+                try {
+                    const response = await fetch('/api/save', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ann_bboxes: this.bboxes})
+                    });
+                    await response.json();
+                } catch (error) {
+                    console.error('Error saving:', error);
+                }
+            }
+
+            clearAll() {
+                this.bboxes = [];
+                this.redraw();
+                this.updateBboxInfo();
+            }
+
+            updateUI() {
+                const info = document.getElementById('imageInfo');
+                const status = document.getElementById('status');
+                
+                if (this.currentData) {
+                    info.textContent = `Image ${this.currentData.index + 1} of ${this.currentData.total}`;
+                    status.textContent = `Status: ${this.currentData.state}`;
+                    status.className = `status ${this.currentData.state}`;
+                    
+                    this.updateBboxInfo();
+                }
+            }
+
+            updateBboxInfo() {
+                const bboxInfo = document.getElementById('bboxInfo');
+                bboxInfo.textContent = `Bounding boxes: ${this.bboxes.length}`;
+            }
+        }
+
+        // Initialize the tool when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new AnnotationTool();
+        });
+    </script>
+</body>
+</html>
