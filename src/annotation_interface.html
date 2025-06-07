@@ -526,12 +526,12 @@
             updateUI() {
                 const info = document.getElementById('imageInfo');
                 const status = document.getElementById('status');
-                
                 if (this.currentData) {
-                    info.textContent = `Image ${this.currentData.index + 1} of ${this.currentData.total}`;
+                    // Show full file path
+                    let fpath = this.currentData.filepath || '';
+                    info.textContent = `Image ${this.currentData.index + 1} of ${this.currentData.total}` + (fpath ? ` — ${fpath}` : '');
                     status.textContent = `Status: ${this.currentData.state}`;
                     status.className = `status ${this.currentData.state}`;
-                    
                     this.updateBboxInfo();
                 }
             }
