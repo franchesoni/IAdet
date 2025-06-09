@@ -19,7 +19,7 @@ class AnnotationApp:
         self._load_data()
 
     def _load_data(self):
-        """Load and validate the annotation data"""
+        """Always reload and validate the annotation data from file"""
         try:
             validate_data(self.ann_file, self.dont_backup)
             with open(self.ann_file, 'r') as f:
@@ -29,50 +29,60 @@ class AnnotationApp:
             print(f"✗ Failed to load data: {e}")
             raise
 
-    def _save_data(self):
-        """Save the annotation data back to file"""
+    def _save_data(self, index: int, ann_bboxes: List[List[int]]):
+        """Reload, update only the specified entry, and save the annotation data back to file (no state field)"""
         try:
+            # Always reload before writing
+            with open(self.ann_file, 'r') as f:
+                data = json.load(f)
+            if 0 <= index < len(data):
+                # If ann_bboxes is None, set to null in JSON; else, set to list
+                data[index]['ann_bboxes'] = ann_bboxes if ann_bboxes is not None else None
+                # Remove 'state' if present
+                if 'state' in data[index]:
+                    del data[index]['state']
             with open(self.ann_file, 'w') as f:
-                json.dump(self.data, f, indent=2)
+                json.dump(data, f, indent=2)
             print(f"✓ Saved data to {self.ann_file}")
         except Exception as e:
             print(f"✗ Failed to save data: {e}")
             raise
 
     def get_current_image_data(self) -> Dict[str, Any]:
-        """Get data for the current image"""
+        """Always reload and get data for the current image (no state field)"""
+        self._load_data()
         if not self.data or self.current_index >= len(self.data):
             return {}
-        
         item = self.data[self.current_index].copy()
+        # Remove 'state' if present
+        if 'state' in item:
+            del item['state']
         item['index'] = self.current_index
         item['total'] = len(self.data)
         return item
 
     def update_current_image(self, ann_bboxes: List[List[int]]) -> Dict[str, Any]:
-        """Update annotations for current image and mark as annotated"""
+        """Reload, update only the current image, and save (no state field)"""
+        self._load_data()
         if not self.data or self.current_index >= len(self.data):
             return {"error": "Invalid image index"}
-        
-        self.data[self.current_index]['ann_bboxes'] = ann_bboxes
-        self.data[self.current_index]['state'] = 'annotated'
-        self._save_data()
-        
+        self._save_data(self.current_index, ann_bboxes)
         return {"success": True, "message": "Annotations saved"}
 
     def navigate_to(self, index: int) -> Dict[str, Any]:
-        """Navigate to a specific image index"""
+        """Navigate to a specific image index, always reload data"""
+        self._load_data()
         if 0 <= index < len(self.data):
             self.current_index = index
             return self.get_current_image_data()
         return {"error": "Invalid index"}
 
     def next_image(self) -> Dict[str, Any]:
-        """Navigate to next image"""
+        """Navigate to next image, always reload data"""
         return self.navigate_to(self.current_index + 1)
 
     def prev_image(self) -> Dict[str, Any]:
-        """Navigate to previous image"""
+        """Navigate to previous image, always reload data"""
         return self.navigate_to(self.current_index - 1)
 
 
