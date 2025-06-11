@@ -588,7 +588,7 @@
                     if (this.movingSide) {
                         // Second click: commit the side move
                         // The actual position is already updated by onMouseMove, this just finalizes.
-                        this.pushHistory(); // Save state before finalizing (bboxes already updated)
+                        // History was pushed when the move started.
                         this.movingSide = null;
                         this.redraw();
                         this.updateBboxInfo();
@@ -596,12 +596,14 @@
                         return; // Click fully handled
                     } else if (this.highlightedBoxIndex !== -1 && this.highlightedBoxSide && !this.firstClick) {
                         // First click on a highlighted side: start moving the side
+                        this.pushHistory(); // Save state BEFORE the move begins
                         this.movingSide = {
                             boxIndex: this.highlightedBoxIndex,
                             side: this.highlightedBoxSide,
-                            originalBox: [...this.bboxes[this.highlightedBoxIndex]] // Store for potential live update reference
+                            // originalBox is not strictly needed for undo if history is managed this way
+                            // but can be kept for other potential uses (e.g. cancel via Esc)
+                            originalBox: [...this.bboxes[this.highlightedBoxIndex]] 
                         };
-                        // No need to pushHistory here, will be pushed when move is committed or if live updates modify bboxes
                         this.redraw(); // To show the side as actively moving
                         return; // Click fully handled for mousedown, don't set maybeClick
                     }
@@ -888,10 +890,18 @@
             undo() {
                 if (this.bboxesHistory.length > 0) {
                     this.bboxes = this.bboxesHistory.pop();
-                    this.highlightedBoxIndex = -1; // Reset highlight
-                    this.highlightedBoxSide = null; // Reset side
+                    this.highlightedBoxIndex = -1;
+                    this.highlightedBoxSide = null;
+                    if (this.movingSide) { // If undo is called mid-side-move, cancel the move
+                        this.movingSide = null;
+                    }
+                    if (this.firstClick) { // If undo is called mid-new-box-creation, cancel it
+                        this.firstClick = null;
+                        this.currentBox = null;
+                    }
                     this.redraw();
                     this.updateBboxInfo();
+                    this.updateUI(); // Update button states (e.g. undo button)
                 }
             }
 
