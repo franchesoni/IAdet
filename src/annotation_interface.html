@@ -172,6 +172,10 @@
                 
                 // Cursor position in image coordinates
                 this.cursorImagePos = { x: null, y: null };
+
+                // Highlight state
+                this.highlightedBoxIndex = -1; // Index of the box to be highlighted
+                this.HIGHLIGHT_DISTANCE_THRESHOLD_PX = 10; // Pixel distance threshold for highlighting/removing boxes
                 
                 this.setupEventListeners();
                 this.initializeApp();
@@ -313,7 +317,7 @@
                     
                     this.currentFilename = filenameToLoad;
                     this.currentIndex = this.allFilenames.indexOf(filenameToLoad);
-                    
+                    this.highlightedBoxIndex = -1; // Reset highlight on new image
                     this.bboxesHistory = [];
                     
                 } catch (error) {
@@ -391,30 +395,49 @@
             }
 
             drawBboxes() {
-                this.ctx.strokeStyle = '#00ff00';
-                this.ctx.lineWidth = 2;
-                this.ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+                this.ctx.save(); // Save context state before drawing bboxes
 
-                for (const bbox of this.bboxes) {
+                for (let i = 0; i < this.bboxes.length; i++) {
+                    const bbox = this.bboxes[i];
                     const [left, top, right, bottom] = bbox;
                     const width = right - left;
                     const height = bottom - top;
+
+                    if (i === this.highlightedBoxIndex) {
+                        this.ctx.strokeStyle = '#ff0000'; // Red for highlighted
+                        this.ctx.lineWidth = 3; // Thicker line for highlighted
+                        this.ctx.fillStyle = 'rgba(255, 0, 0, 0.2)'; // Lighter red fill
+                    } else {
+                        this.ctx.strokeStyle = '#00ff00'; // Green for normal
+                        this.ctx.lineWidth = 2;
+                        this.ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+                    }
+                    
                     this.ctx.fillRect(left, top, width, height);
                     this.ctx.strokeRect(left, top, width, height);
+                    
                     // Draw bbox center very lightly
                     const cx = (left + right) / 2;
                     const cy = (top + bottom) / 2;
-                    this.ctx.save();
+                    
+                    // Temporarily set style for center marker
+                    const originalAlpha = this.ctx.globalAlpha;
+                    const originalFillStyle = this.ctx.fillStyle;
+
                     this.ctx.globalAlpha = 0.2;
                     this.ctx.beginPath();
                     this.ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
-                    this.ctx.fillStyle = '#ffffff';
+                    this.ctx.fillStyle = '#ffffff'; // White center
                     this.ctx.fill();
-                    this.ctx.restore();
+                    
+                    this.ctx.globalAlpha = originalAlpha; // Restore alpha
+                    // No need to restore fillStyle here as it's set per-box above
                 }
+                this.ctx.restore(); // Restore context state after drawing all bboxes
 
-                // Draw current box being drawn
+                // Draw current box being drawn (if any)
                 if (this.currentBox) {
+                    this.ctx.save(); // Save for currentBox drawing
                     this.ctx.strokeStyle = '#ffff00';
                     this.ctx.fillStyle = 'rgba(255, 255, 0, 0.1)';
                     const [left, top, right, bottom] = this.currentBox;
@@ -422,6 +445,7 @@
                     const height = bottom - top;
                     this.ctx.fillRect(left, top, width, height);
                     this.ctx.strokeRect(left, top, width, height);
+                    this.ctx.restore(); // Restore after currentBox
                 }
             }
 
@@ -443,6 +467,63 @@
                     canvasX: canvasX,
                     canvasY: canvasY
                 };
+            }
+            
+            findClosestBox(imageX, imageY) {
+                if (!this.image.src || this.bboxes.length === 0) {
+                    return { index: -1, distance: Infinity };
+                }
+
+                let minSelectionMetric = Infinity;
+                let minAreaAtMinSelectionMetric = Infinity;
+                let bestIdx = -1;
+                let finalGeometricDistForThreshold = Infinity;
+
+                const px = imageX;
+                const py = imageY;
+
+                for (let i = 0; i < this.bboxes.length; i++) {
+                    const bbox = this.bboxes[i];
+                    const [l, t, r, b] = bbox;
+
+                    let currentSelectionMetric;
+                    let currentGeometricDist;
+                    const isInside = (px >= l && px <= r && py >= t && py <= b);
+
+                    if (isInside) {
+                        currentSelectionMetric = Math.min(px - l, r - px, py - t, b - py);
+                        currentGeometricDist = 0;
+                    } else {
+                        const dxOut = Math.max(0, l - px, px - r);
+                        const dyOut = Math.max(0, t - py, py - b);
+                        currentSelectionMetric = Math.sqrt(dxOut * dxOut + dyOut * dyOut);
+                        currentGeometricDist = currentSelectionMetric;
+                    }
+
+                    const currentArea = (r - l) * (b - t);
+
+                    let isBetterCandidate = false;
+                    if (currentSelectionMetric < minSelectionMetric) {
+                        isBetterCandidate = true;
+                    } else if (currentSelectionMetric === minSelectionMetric) {
+                        if (currentArea < minAreaAtMinSelectionMetric) {
+                            isBetterCandidate = true;
+                        } else if (currentArea === minAreaAtMinSelectionMetric) {
+                            // Optional: if areas are also identical, prefer smaller index for stability
+                            // This case is rare, but could matter if not handled.
+                            // For now, existing bestIdx (smaller index) would be kept if areas are identical.
+                        }
+                    }
+
+                    if (isBetterCandidate) {
+                        minSelectionMetric = currentSelectionMetric;
+                        minAreaAtMinSelectionMetric = currentArea;
+                        bestIdx = i;
+                        finalGeometricDistForThreshold = currentGeometricDist;
+                    }
+                }
+
+                return { index: bestIdx, distance: finalGeometricDistForThreshold };
             }
             
             onMouseDown(e) {
@@ -476,29 +557,47 @@
                 const scaleY = this.canvas.height / rect.height;
                 const canvasX = (e.clientX - rect.left) * scaleX;
                 const canvasY = (e.clientY - rect.top) * scaleY;
-                // Update crosshair position
+                
                 this.crosshair.x = canvasX;
                 this.crosshair.y = canvasY;
-                // Update image coordinates for cursor
-                const imageX = (canvasX - this.translateX) / this.scale;
-                const imageY = (canvasY - this.translateY) / this.scale;
+                
+                const currentImageX = (canvasX - this.translateX) / this.scale;
+                const currentImageY = (canvasY - this.translateY) / this.scale;
+
                 if (
-                    imageX >= 0 && imageX <= this.image.width &&
-                    imageY >= 0 && imageY <= this.image.height
+                    currentImageX >= 0 && currentImageX <= this.image.width &&
+                    currentImageY >= 0 && currentImageY <= this.image.height
                 ) {
-                    this.cursorImagePos.x = Math.round(imageX);
-                    this.cursorImagePos.y = Math.round(imageY);
+                    this.cursorImagePos.x = Math.round(currentImageX);
+                    this.cursorImagePos.y = Math.round(currentImageY);
                 } else {
                     this.cursorImagePos.x = null;
                     this.cursorImagePos.y = null;
                 }
+
+                // Tentatively set highlight based on proximity
+                let potentialHighlightIdx = -1;
+                if (!this.dragging && !this.firstClick && !this.maybeClick && this.image.src && this.bboxes.length > 0) {
+                    if (this.cursorImagePos.x !== null && this.cursorImagePos.y !== null) {
+                        const { index: closestIdx, distance: closestDist } = 
+                            this.findClosestBox(this.cursorImagePos.x, this.cursorImagePos.y);
+                        
+                        if (closestIdx !== -1 && closestDist < this.HIGHLIGHT_DISTANCE_THRESHOLD_PX) {
+                            potentialHighlightIdx = closestIdx;
+                        }
+                    }
+                }
+                this.highlightedBoxIndex = potentialHighlightIdx; 
+
                 const moveDist = Math.hypot(canvasX - this.mouseDownX, canvasY - this.mouseDownY);
                 const DRAG_THRESHOLD = 5;
                 if (this.maybeClick && moveDist > DRAG_THRESHOLD) {
                     if(this.isLoading) return; // Prevent starting a drag if loading started mid-gesture
                     this.dragging = true;
                     this.movedEnough = true;
+                    this.highlightedBoxIndex = -1; // Stop highlighting when drag starts
                 }
+
                 if (this.dragging) {
                     if(this.isLoading) return; // Prevent panning if loading
                     // Handle canvas dragging
@@ -509,8 +608,10 @@
                     this.lastX = canvasX;
                     this.lastY = canvasY;
                     this.redraw();
+                    this.updateCursorInfo(); // Update cursor info during pan
                     return;
                 }
+                
                 // Handle bbox preview during drawing
                 if (this.firstClick) {
                     if(this.isLoading) return; // Prevent drawing new box if loading
@@ -523,7 +624,7 @@
                     this.currentBox = [Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)];
                     this.redraw();
                 } else {
-                    this.redraw(); // Always redraw to update crosshair
+                    this.redraw(); // Always redraw to update crosshair and potential highlight
                 }
                 this.updateCursorInfo();
             }
@@ -610,34 +711,33 @@
                 if (this.isLoading) return;
                 e.preventDefault();
                 
-                const pos = this.getMousePos(e);
-                if (!this.image.src || this.bboxes.length === 0) return; 
-
-                let minDist = Infinity;
-                let minIdx = -1;
-                for (let i = 0; i < this.bboxes.length; i++) {
-                    const [left, top, right, bottom] = this.bboxes[i];
-                    const cx = (left + right) / 2;
-                    const cy = (top + bottom) / 2;
-                    const w = Math.max(1, right - left);
-                    const h = Math.max(1, bottom - top);
-                    // Mahalanobis distance: sqrt( ((x-cx)/w)^2 + ((y-cy)/h)^2 )
-                    const dx = (pos.x - cx) / w;
-                    const dy = (pos.y - cy) / h;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist < minDist) {
-                        minDist = dist;
-                        minIdx = i;
-                    }
-                }
-                const REMOVAL_THRESHOLD = 0.7; 
-                if (minIdx !== -1 && minDist < REMOVAL_THRESHOLD) {
+                // No need to getMousePos here, rely on highlightedBoxIndex from onMouseMove
+                if (this.highlightedBoxIndex !== -1) {
                     this.pushHistory();
-                    this.bboxes.splice(minIdx, 1);
+                    this.bboxes.splice(this.highlightedBoxIndex, 1);
+                    this.highlightedBoxIndex = -1; // Reset highlight after removal
                     this.redraw();
                     this.updateBboxInfo();
-                    this.updateUI(); // Update button states
+                    this.updateUI();
                 }
+                // If no box is highlighted, right-click does nothing.
+            }
+
+            onMouseOut(e) {
+                this.crosshair.x = null;
+                this.crosshair.y = null;
+                // cursorImagePos will be updated by onMouseMove if mouse re-enters.
+                // If it truly left, it should be null.
+
+                let needsRedraw = false;
+                if (this.highlightedBoxIndex !== -1) {
+                    this.highlightedBoxIndex = -1;
+                    needsRedraw = true; // Highlight is removed, so redraw
+                }
+                
+                // Always redraw to remove crosshair, and if highlight changed
+                this.redraw(); 
+                this.updateCursorInfo(); // Clear/update cursor info
             }
 
             async navigate(direction) {
@@ -708,6 +808,7 @@
             undo() {
                 if (this.bboxesHistory.length > 0) {
                     this.bboxes = this.bboxesHistory.pop();
+                    this.highlightedBoxIndex = -1; // Reset highlight
                     this.redraw();
                     this.updateBboxInfo();
                     this.updateUI(); // Update button states
@@ -720,6 +821,7 @@
                     this.bboxes = [];
                     this.firstClick = null; 
                     this.currentBox = null;
+                    this.highlightedBoxIndex = -1; // Reset highlight
                     this.redraw();
                     this.updateBboxInfo();
                     this.updateUI(); // Update button states
