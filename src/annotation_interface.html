@@ -175,7 +175,11 @@
 
                 // Highlight state
                 this.highlightedBoxIndex = -1; // Index of the box to be highlighted
+                this.highlightedBoxSide = null; // Which side of the highlighted box is closest
                 this.HIGHLIGHT_DISTANCE_THRESHOLD_PX = 10; // Pixel distance threshold for highlighting/removing boxes
+                
+                // Moving state
+                this.movingSide = null; // { boxIndex, side, originalBox } if moving a side
                 
                 this.setupEventListeners();
                 this.initializeApp();
@@ -318,6 +322,7 @@
                     this.currentFilename = filenameToLoad;
                     this.currentIndex = this.allFilenames.indexOf(filenameToLoad);
                     this.highlightedBoxIndex = -1; // Reset highlight on new image
+                    this.highlightedBoxSide = null; // Reset closest side on new image
                     this.bboxesHistory = [];
                     
                 } catch (error) {
@@ -397,41 +402,69 @@
             drawBboxes() {
                 this.ctx.save(); // Save context state before drawing bboxes
 
+                const defaultStrokeStyle = '#00ffff';
+                const defaultLineWidth = 1;
+                const defaultFillStyle = 'rgba(0, 255, 255, 0.1)';
+                const highlightFillStyle = 'rgba(255, 0, 0, 0.2)';
+                const highlightStrokeStyle = 'rgba(255, 0, 0, 0.7)';
+                const highlightBaseLineWidth = 2;
+                const thickSideLineWidth = 4; // For the specific thicker side
+                const movingSideColor = '#ffff00';
+                const movingSideLineWidth = 5;
+
                 for (let i = 0; i < this.bboxes.length; i++) {
                     const bbox = this.bboxes[i];
                     const [left, top, right, bottom] = bbox;
                     const width = right - left;
                     const height = bottom - top;
 
-                    if (i === this.highlightedBoxIndex) {
-                        this.ctx.strokeStyle = '#ff0000'; // Red for highlighted
-                        this.ctx.lineWidth = 3; // Thicker line for highlighted
-                        this.ctx.fillStyle = 'rgba(255, 0, 0, 0.2)'; // Lighter red fill
+                    this.ctx.save(); // Save for this specific bbox's styling
+
+                    if (this.movingSide && this.movingSide.boxIndex === i) {
+                        // Draw the box as usual, but highlight the moving side in yellow
+                        this.ctx.fillStyle = highlightFillStyle;
+                        this.ctx.fillRect(left, top, width, height);
+                        this.ctx.strokeStyle = highlightStrokeStyle;
+                        this.ctx.lineWidth = highlightBaseLineWidth;
+                        this.ctx.strokeRect(left, top, width, height);
+                        // Draw the moving side thicker and in yellow
+                        this.ctx.strokeStyle = movingSideColor;
+                        this.ctx.lineWidth = movingSideLineWidth;
+                        this.ctx.beginPath();
+                        const side = this.movingSide.side;
+                        if (side === 'left') { this.ctx.moveTo(left, top); this.ctx.lineTo(left, bottom); }
+                        else if (side === 'right') { this.ctx.moveTo(right, top); this.ctx.lineTo(right, bottom); }
+                        else if (side === 'top') { this.ctx.moveTo(left, top); this.ctx.lineTo(right, top); }
+                        else if (side === 'bottom') { this.ctx.moveTo(left, bottom); this.ctx.lineTo(right, bottom); }
+                        this.ctx.stroke();
+                    } else if (i === this.highlightedBoxIndex) {
+                        this.ctx.fillStyle = highlightFillStyle;
+                        this.ctx.fillRect(left, top, width, height);
+                        this.ctx.strokeStyle = highlightStrokeStyle;
+                        this.ctx.lineWidth = highlightBaseLineWidth;
+                        this.ctx.strokeRect(left, top, width, height);
+                        // If a specific side is highlighted, draw it thicker over the base highlight
+                        const sideToThicken = this.highlightedBoxSide;
+                        if (sideToThicken && ['left', 'right', 'top', 'bottom'].includes(sideToThicken)) {
+                            this.ctx.strokeStyle = highlightStrokeStyle; // Same color, just thicker
+                            this.ctx.lineWidth = thickSideLineWidth;
+                            this.ctx.beginPath();
+                            if (sideToThicken === 'left') { this.ctx.moveTo(left, top); this.ctx.lineTo(left, bottom); }
+                            else if (sideToThicken === 'right') { this.ctx.moveTo(right, top); this.ctx.lineTo(right, bottom); }
+                            else if (sideToThicken === 'top') { this.ctx.moveTo(left, top); this.ctx.lineTo(right, top); }
+                            else if (sideToThicken === 'bottom') { this.ctx.moveTo(left, bottom); this.ctx.lineTo(right, bottom); }
+                            this.ctx.stroke();
+                        }
                     } else {
-                        this.ctx.strokeStyle = '#00ff00'; // Green for normal
-                        this.ctx.lineWidth = 2;
-                        this.ctx.fillStyle = 'rgba(0, 255, 0, 0.1)';
+                        // Non-highlighted box
+                        this.ctx.fillStyle = defaultFillStyle;
+                        this.ctx.strokeStyle = defaultStrokeStyle;
+                        this.ctx.lineWidth = defaultLineWidth;
+                        this.ctx.fillRect(left, top, width, height);
+                        this.ctx.strokeRect(left, top, width, height);
                     }
                     
-                    this.ctx.fillRect(left, top, width, height);
-                    this.ctx.strokeRect(left, top, width, height);
-                    
-                    // Draw bbox center very lightly
-                    const cx = (left + right) / 2;
-                    const cy = (top + bottom) / 2;
-                    
-                    // Temporarily set style for center marker
-                    const originalAlpha = this.ctx.globalAlpha;
-                    const originalFillStyle = this.ctx.fillStyle;
-
-                    this.ctx.globalAlpha = 0.2;
-                    this.ctx.beginPath();
-                    this.ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
-                    this.ctx.fillStyle = '#ffffff'; // White center
-                    this.ctx.fill();
-                    
-                    this.ctx.globalAlpha = originalAlpha; // Restore alpha
-                    // No need to restore fillStyle here as it's set per-box above
+                    this.ctx.restore(); // Restore from this bbox's styling
                 }
                 this.ctx.restore(); // Restore context state after drawing all bboxes
 
@@ -471,13 +504,13 @@
             
             findClosestBox(imageX, imageY) {
                 if (!this.image.src || this.bboxes.length === 0) {
-                    return { index: -1, distance: Infinity };
+                    return { index: -1, distance: Infinity, closestSide: null };
                 }
 
-                let minSelectionMetric = Infinity;
-                let minAreaAtMinSelectionMetric = Infinity;
                 let bestIdx = -1;
-                let finalGeometricDistForThreshold = Infinity;
+                let bestSide = null;
+                let minDist = Infinity;
+                let minArea = Infinity;
 
                 const px = imageX;
                 const py = imageY;
@@ -485,45 +518,53 @@
                 for (let i = 0; i < this.bboxes.length; i++) {
                     const bbox = this.bboxes[i];
                     const [l, t, r, b] = bbox;
+                    const area = (r - l) * (b - t);
 
-                    let currentSelectionMetric;
-                    let currentGeometricDist;
-                    const isInside = (px >= l && px <= r && py >= t && py <= b);
-
-                    if (isInside) {
-                        currentSelectionMetric = Math.min(px - l, r - px, py - t, b - py);
-                        currentGeometricDist = 0;
-                    } else {
-                        const dxOut = Math.max(0, l - px, px - r);
-                        const dyOut = Math.max(0, t - py, py - b);
-                        currentSelectionMetric = Math.sqrt(dxOut * dxOut + dyOut * dyOut);
-                        currentGeometricDist = currentSelectionMetric;
-                    }
-
-                    const currentArea = (r - l) * (b - t);
-
-                    let isBetterCandidate = false;
-                    if (currentSelectionMetric < minSelectionMetric) {
-                        isBetterCandidate = true;
-                    } else if (currentSelectionMetric === minSelectionMetric) {
-                        if (currentArea < minAreaAtMinSelectionMetric) {
-                            isBetterCandidate = true;
-                        } else if (currentArea === minAreaAtMinSelectionMetric) {
-                            // Optional: if areas are also identical, prefer smaller index for stability
-                            // This case is rare, but could matter if not handled.
-                            // For now, existing bestIdx (smaller index) would be kept if areas are identical.
+                    // Check each side: only if cursor is within the span of the edge
+                    // Left edge: x ~ l, y in [t, b]
+                    if (py >= t && py <= b) {
+                        const dist = Math.abs(px - l);
+                        if (dist < minDist || (dist === minDist && area < minArea)) {
+                            minDist = dist;
+                            bestIdx = i;
+                            bestSide = 'left';
+                            minArea = area;
                         }
                     }
-
-                    if (isBetterCandidate) {
-                        minSelectionMetric = currentSelectionMetric;
-                        minAreaAtMinSelectionMetric = currentArea;
-                        bestIdx = i;
-                        finalGeometricDistForThreshold = currentGeometricDist;
+                    // Right edge: x ~ r, y in [t, b]
+                    if (py >= t && py <= b) {
+                        const dist = Math.abs(px - r);
+                        if (dist < minDist || (dist === minDist && area < minArea)) {
+                            minDist = dist;
+                            bestIdx = i;
+                            bestSide = 'right';
+                            minArea = area;
+                        }
+                    }
+                    // Top edge: y ~ t, x in [l, r]
+                    if (px >= l && px <= r) {
+                        const dist = Math.abs(py - t);
+                        if (dist < minDist || (dist === minDist && area < minArea)) {
+                            minDist = dist;
+                            bestIdx = i;
+                            bestSide = 'top';
+                            minArea = area;
+                        }
+                    }
+                    // Bottom edge: y ~ b, x in [l, r]
+                    if (px >= l && px <= r) {
+                        const dist = Math.abs(py - b);
+                        if (dist < minDist || (dist === minDist && area < minArea)) {
+                            minDist = dist;
+                            bestIdx = i;
+                            bestSide = 'bottom';
+                            minArea = area;
+                        }
                     }
                 }
 
-                return { index: bestIdx, distance: finalGeometricDistForThreshold };
+                // Only highlight if within a reasonable distance
+                return { index: bestIdx, distance: minDist, closestSide: bestSide };
             }
             
             onMouseDown(e) {
@@ -534,24 +575,44 @@
                 this.mouseDownX = (e.clientX - rect.left) * scaleX;
                 this.mouseDownY = (e.clientY - rect.top) * scaleY;
                 this.dragging = false;
-                this.maybeClick = false;
+                this.maybeClick = false; // Reset for current interaction sequence
                 this.movedEnough = false;
+
                 if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.shiftKey))) {
                     // Middle or ctrl/shift+left: always pan
                     this.dragging = true;
                     this.lastX = this.mouseDownX;
                     this.lastY = this.mouseDownY;
                     e.preventDefault();
-                } else if (e.button === 0) {
-                    // Left: could be click or drag
+                } else if (e.button === 0) { // Left click
+                    if (this.movingSide) {
+                        // Second click: commit the side move
+                        // The actual position is already updated by onMouseMove, this just finalizes.
+                        this.pushHistory(); // Save state before finalizing (bboxes already updated)
+                        this.movingSide = null;
+                        this.redraw();
+                        this.updateBboxInfo();
+                        this.updateUI();
+                        return; // Click fully handled
+                    } else if (this.highlightedBoxIndex !== -1 && this.highlightedBoxSide && !this.firstClick) {
+                        // First click on a highlighted side: start moving the side
+                        this.movingSide = {
+                            boxIndex: this.highlightedBoxIndex,
+                            side: this.highlightedBoxSide,
+                            originalBox: [...this.bboxes[this.highlightedBoxIndex]] // Store for potential live update reference
+                        };
+                        // No need to pushHistory here, will be pushed when move is committed or if live updates modify bboxes
+                        this.redraw(); // To show the side as actively moving
+                        return; // Click fully handled for mousedown, don't set maybeClick
+                    }
+                    // If not starting or committing a side move, it's a potential new box click or pan drag start
                     this.maybeClick = true;
                     this.lastX = this.mouseDownX;
                     this.lastY = this.mouseDownY;
                 }
             }
-            
+
             onMouseMove(e) {
-                // Allow mouse move for crosshair even if loading, but not for actions
                 const rect = this.canvas.getBoundingClientRect();
                 const scaleX = this.canvas.width / rect.width;
                 const scaleY = this.canvas.height / rect.height;
@@ -564,10 +625,8 @@
                 const currentImageX = (canvasX - this.translateX) / this.scale;
                 const currentImageY = (canvasY - this.translateY) / this.scale;
 
-                if (
-                    currentImageX >= 0 && currentImageX <= this.image.width &&
-                    currentImageY >= 0 && currentImageY <= this.image.height
-                ) {
+                if (currentImageX >= 0 && currentImageX <= this.image.width &&
+                    currentImageY >= 0 && currentImageY <= this.image.height) {
                     this.cursorImagePos.x = Math.round(currentImageX);
                     this.cursorImagePos.y = Math.round(currentImageY);
                 } else {
@@ -575,32 +634,48 @@
                     this.cursorImagePos.y = null;
                 }
 
-                // Tentatively set highlight based on proximity
-                let potentialHighlightIdx = -1;
-                if (!this.dragging && !this.firstClick && !this.maybeClick && this.image.src && this.bboxes.length > 0) {
-                    if (this.cursorImagePos.x !== null && this.cursorImagePos.y !== null) {
-                        const { index: closestIdx, distance: closestDist } = 
-                            this.findClosestBox(this.cursorImagePos.x, this.cursorImagePos.y);
-                        
-                        if (closestIdx !== -1 && closestDist < this.HIGHLIGHT_DISTANCE_THRESHOLD_PX) {
-                            potentialHighlightIdx = closestIdx;
-                        }
+                if (this.movingSide) {
+                    const { boxIndex, side } = this.movingSide;
+                    let tempBox = [...this.bboxes[boxIndex]]; // Operate on a copy for bounds checking
+                    let newCoord;
+
+                    if (side === 'left') {
+                        newCoord = Math.round(currentImageX);
+                        tempBox[0] = Math.max(0, Math.min(newCoord, tempBox[2] - 1));
+                    } else if (side === 'right') {
+                        newCoord = Math.round(currentImageX);
+                        tempBox[2] = Math.min(this.image.width, Math.max(newCoord, tempBox[0] + 1));
+                    } else if (side === 'top') {
+                        newCoord = Math.round(currentImageY);
+                        tempBox[1] = Math.max(0, Math.min(newCoord, tempBox[3] - 1));
+                    } else if (side === 'bottom') {
+                        newCoord = Math.round(currentImageY);
+                        tempBox[3] = Math.min(this.image.height, Math.max(newCoord, tempBox[1] + 1));
                     }
+                    this.bboxes[boxIndex] = tempBox; // Update the actual bbox for live preview
+                    this.redraw();
+                    this.updateBboxInfo(); 
+                    // this.updateUI(); // Optional: can be too frequent
+                    return; // Side move preview handled
                 }
-                this.highlightedBoxIndex = potentialHighlightIdx; 
 
                 const moveDist = Math.hypot(canvasX - this.mouseDownX, canvasY - this.mouseDownY);
                 const DRAG_THRESHOLD = 5;
+
                 if (this.maybeClick && moveDist > DRAG_THRESHOLD) {
-                    if(this.isLoading) return; // Prevent starting a drag if loading started mid-gesture
+                    if(this.isLoading) return;
                     this.dragging = true;
                     this.movedEnough = true;
-                    this.highlightedBoxIndex = -1; // Stop highlighting when drag starts
+                    this.highlightedBoxIndex = -1; 
+                    this.highlightedBoxSide = null;
+                    if (this.firstClick) { // If was starting a new box, cancel it by drag
+                        this.firstClick = null;
+                        this.currentBox = null;
+                    }
                 }
 
-                if (this.dragging) {
-                    if(this.isLoading) return; // Prevent panning if loading
-                    // Handle canvas dragging
+                if (this.dragging) { // Panning
+                    if(this.isLoading) return;
                     const dx = canvasX - this.lastX;
                     const dy = canvasY - this.lastY;
                     this.translateX += dx;
@@ -608,80 +683,83 @@
                     this.lastX = canvasX;
                     this.lastY = canvasY;
                     this.redraw();
-                    this.updateCursorInfo(); // Update cursor info during pan
-                    return;
+                    this.updateCursorInfo();
+                    return; // Panning handled
                 }
                 
-                // Handle bbox preview during drawing
-                if (this.firstClick) {
-                    if(this.isLoading) return; // Prevent drawing new box if loading
-                    const imageX = (canvasX - this.translateX) / this.scale;
-                    const imageY = (canvasY - this.translateY) / this.scale;
+                // If not moving a side and not panning:
+                if (this.firstClick) { // Drawing a new box (preview)
+                    const imageX = currentImageX;
+                    const imageY = currentImageY;
                     const left = Math.min(this.firstClick.x, imageX);
                     const top = Math.min(this.firstClick.y, imageY);
                     const right = Math.max(this.firstClick.x, imageX);
                     const bottom = Math.max(this.firstClick.y, imageY);
                     this.currentBox = [Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)];
-                    this.redraw();
-                } else {
-                    this.redraw(); // Always redraw to update crosshair and potential highlight
+                } else { // Not drawing a new box, so update highlights
+                    let potentialHighlightIdx = -1;
+                    let potentialHighlightSide = null;
+                    if (!this.dragging && this.image.src && this.bboxes.length > 0) {
+                        if (this.cursorImagePos.x !== null && this.cursorImagePos.y !== null) {
+                            const { index, distance, closestSide } = this.findClosestBox(this.cursorImagePos.x, this.cursorImagePos.y);
+                            if (index !== -1) {
+                                const distCanvas = distance * this.scale;
+                                if (distCanvas < this.HIGHLIGHT_DISTANCE_THRESHOLD_PX) {
+                                    potentialHighlightIdx = index;
+                                    potentialHighlightSide = closestSide;
+                                }
+                            }
+                        }
+                    }
+                    this.highlightedBoxIndex = potentialHighlightIdx;
+                    this.highlightedBoxSide = potentialHighlightSide;
                 }
+                this.redraw(); // Common redraw for new box preview or highlights
                 this.updateCursorInfo();
             }
             
             onMouseUp(e) {
                 if (this.isLoading) return;
-                if (e.button === 0) {
+                if (e.button === 0) { // Left button up
                     if (this.dragging && this.movedEnough) {
-                        // End pan
+                        // Pan drag finished
                         this.dragging = false;
-                        this.maybeClick = false;
-                        this.movedEnough = false;
-                        return;
-                    }
-                    // If not a drag, treat as click for bbox
-                    const rect = this.canvas.getBoundingClientRect();
-                    const scaleX = this.canvas.width / rect.width;
-                    const scaleY = this.canvas.height / rect.height;
-                    const canvasX = (e.clientX - rect.left) * scaleX;
-                    const canvasY = (e.clientY - rect.top) * scaleY;
-                    // Convert to image coordinates
-                    const imageX = (canvasX - this.translateX) / this.scale;
-                    const imageY = (canvasY - this.translateY) / this.scale;
-                    // Check if click is within image bounds
-                    if (imageX < 0 || imageX > this.image.width || imageY < 0 || imageY > this.image.height) {
-                        this.maybeClick = false;
-                        this.movedEnough = false;
-                        // Reset drawing state if click is outside image
-                        if (this.firstClick) {
-                            this.firstClick = null;
-                            this.currentBox = null;
-                            this.redraw(); // Redraw to remove preview box
+                        // this.maybeClick and this.movedEnough will be reset at the end
+                    } else if (this.maybeClick) { // Was a click (not a drag), and mousedown intended it for box logic
+                        const { x: imageX, y: imageY } = this.getMousePos(e);
+
+                        if (imageX < 0 || imageX > this.image.width || imageY < 0 || imageY > this.image.height) {
+                            // Click outside image
+                            if (this.firstClick) { // If was drawing new box, cancel
+                                this.firstClick = null;
+                                this.currentBox = null;
+                                this.redraw();
+                            }
+                        } else {
+                            // Click inside image - for new box creation
+                            if (!this.firstClick) {
+                                // First click for a new box
+                                this.firstClick = { x: imageX, y: imageY };
+                                this.currentBox = null; // Preview will be drawn on mousemove
+                            } else {
+                                // Second click for a new box
+                                const left = Math.min(this.firstClick.x, imageX);
+                                const top = Math.min(this.firstClick.y, imageY);
+                                const right = Math.max(this.firstClick.x, imageX);
+                                const bottom = Math.max(this.firstClick.y, imageY);
+                                if (right - left > 5 && bottom - top > 5) { // Min box size
+                                    this.pushHistory();
+                                    this.bboxes.push([Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)]);
+                                    this.updateBboxInfo();
+                                    this.updateUI();
+                                }
+                                this.firstClick = null;
+                                this.currentBox = null;
+                                this.redraw();
+                            }
                         }
-                        return;
                     }
-                    if (!this.firstClick) {
-                        // First click - start drawing
-                        this.firstClick = { x: imageX, y: imageY };
-                        this.currentBox = null;
-                    } else {
-                        // Second click - finish box
-                        const left = Math.min(this.firstClick.x, imageX);
-                        const top = Math.min(this.firstClick.y, imageY);
-                        const right = Math.max(this.firstClick.x, imageX);
-                        const bottom = Math.max(this.firstClick.y, imageY);
-                        // Only add if box has meaningful size
-                        if (right - left > 5 && bottom - top > 5) {
-                            this.pushHistory();
-                            this.bboxes.push([Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)]);
-                            this.updateBboxInfo();
-                            this.updateUI(); // Update button states (e.g. clear button)
-                        }
-                        // Reset for next box
-                        this.firstClick = null;
-                        this.currentBox = null;
-                        this.redraw();
-                    }
+                    // Always reset these after any left mouse up
                     this.maybeClick = false;
                     this.movedEnough = false;
                 }
@@ -716,6 +794,7 @@
                     this.pushHistory();
                     this.bboxes.splice(this.highlightedBoxIndex, 1);
                     this.highlightedBoxIndex = -1; // Reset highlight after removal
+                    this.highlightedBoxSide = null; // Reset side after removal
                     this.redraw();
                     this.updateBboxInfo();
                     this.updateUI();
@@ -732,6 +811,7 @@
                 let needsRedraw = false;
                 if (this.highlightedBoxIndex !== -1) {
                     this.highlightedBoxIndex = -1;
+                    this.highlightedBoxSide = null; // Reset side
                     needsRedraw = true; // Highlight is removed, so redraw
                 }
                 
@@ -809,9 +889,9 @@
                 if (this.bboxesHistory.length > 0) {
                     this.bboxes = this.bboxesHistory.pop();
                     this.highlightedBoxIndex = -1; // Reset highlight
+                    this.highlightedBoxSide = null; // Reset side
                     this.redraw();
                     this.updateBboxInfo();
-                    this.updateUI(); // Update button states
                 }
             }
 
