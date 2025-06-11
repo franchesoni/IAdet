@@ -78,17 +78,6 @@
             color: #ccc;
         }
 
-        .status {
-            margin-top: 10px;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-weight: bold;
-        }
-
-        .status.unseen { background-color: #666; }
-        .status.predicted { background-color: #664400; }
-        .status.annotated { background-color: #006600; }
-
         .help {
             margin-top: 20px;
             background-color: #333;
@@ -118,6 +107,7 @@
         <button id="clearBtn">Clear All</button>
         <button id="undoBtn">Undo</button>
         <button id="resetViewBtn">Reset View</button>
+        <button id="exportBtn">Export</button>
         <span id="imageInfo" style="margin: 0 20px; line-height: 32px;"></span>
     </div>
 
@@ -126,7 +116,6 @@
     </div>
 
     <div class="info">
-        <div id="status" class="status"></div>
         <div id="bboxInfo" class="bbox-info"></div>
         <div id="cursorInfo" class="bbox-info"></div>
         <div id="imageSizeInfo" class="bbox-info"></div>
@@ -142,6 +131,7 @@
             <li><strong>Navigate:</strong> Use Previous/Next buttons or arrow keys</li>
             <li><strong>Clear all:</strong> Remove all bounding boxes</li>
             <li><strong>Reset view:</strong> Fit image to canvas</li>
+            <li><strong>Export:</strong> Calls the export function in io_data.py</li>
         </ul>
         <p><strong>Note:</strong> Annotations are automatically saved when you navigate to another image.</p>
     </div>
@@ -152,11 +142,14 @@
                 this.canvas = document.getElementById('canvas');
                 this.ctx = this.canvas.getContext('2d');
                 this.image = new Image();
-                this.currentData = null;
                 this.bboxes = [];
                 this.bboxesHistory = [];
                 this.firstClick = null;
                 this.currentBox = null;
+
+                this.allFilenames = [];
+                this.currentIndex = -1;
+                this.currentFilename = null;
                 
                 // Transform variables
                 this.translateX = 0;
@@ -167,6 +160,10 @@
                 this.dragging = false;
                 this.lastX = 0;
                 this.lastY = 0;
+                this.mouseDownX = 0; // Added for drag threshold calculation
+                this.mouseDownY = 0; // Added for drag threshold calculation
+                this.maybeClick = false; // Added for distinguishing click from drag
+                this.movedEnough = false; // Added for distinguishing click from drag
                 
                 // Crosshair state
                 this.crosshair = { x: null, y: null };
@@ -175,7 +172,7 @@
                 this.cursorImagePos = { x: null, y: null };
                 
                 this.setupEventListeners();
-                this.loadCurrentImage();
+                this.initializeApp();
             }
 
             setupEventListeners() {
@@ -185,9 +182,11 @@
                 document.getElementById('clearBtn').addEventListener('click', () => this.clearAll());
                 document.getElementById('undoBtn').addEventListener('click', () => this.undo());
                 document.getElementById('resetViewBtn').addEventListener('click', () => {
-                    this.resetView();
+                    this.resetView(); 
                     this.redraw();
                 });
+                document.getElementById('exportBtn').addEventListener('click', () => this.exportAnnotations());
+
 
                 // Keyboard events
                 document.addEventListener('keydown', (e) => {
@@ -215,37 +214,87 @@
 
                 // Image load event
                 this.image.onload = () => this.onImageLoad();
+                // Removed this.image.onerror handler
             }
 
-            async loadCurrentImage() {
+            async initializeApp() {
                 try {
-                    const response = await fetch('/api/current');
-                    this.currentData = await response.json();
-                    
-                    if (this.currentData.error) {
-                        console.error('Error loading image:', this.currentData.error);
+                    const response = await fetch('/api/read_filenames');
+                    if (!response.ok) {
+                        console.error(`HTTP error! status: ${response.status}`);
+                        this.updateUI(); // Update button states etc.
                         return;
                     }
+                    const data = await response.json();
+                    this.allFilenames = data.filenames || [];
 
-                    // Load bounding boxes (prefer annotated over predicted)
-                    this.bboxes = this.currentData.ann_bboxes.length > 0 
-                        ? [...this.currentData.ann_bboxes]
-                        : [...this.currentData.pred_bboxes];
-
-                    // Clear undo history for new image
-                    this.bboxesHistory = [];
-
-                    // Update UI
-                    this.updateUI();
-                    
-                    // Load image
-                    this.image.src = '/api/image?' + Date.now(); // Cache bust
-                    
+                    if (this.allFilenames.length > 0) {
+                        this.currentIndex = 0; 
+                        // Load the first image; pass "FIRST" as filenameOfPrev
+                        await this.fetchAndLoadImage(this.allFilenames[this.currentIndex], "FIRST", []);
+                    } else {
+                        console.warn('No filenames received from /api/read_filenames or list is empty.');
+                        this.updateUI(); 
+                    }
                 } catch (error) {
-                    console.error('Error loading current image:', error);
+                    console.error('Error initializing app:', error);
+                    this.updateUI();
                 }
             }
 
+            async fetchAndLoadImage(filenameToLoad, filenameOfPrev, bboxesOfPrev) {
+                if (!filenameToLoad) {
+                    console.error("No filename provided to load.");
+                    this.updateUI();
+                    return;
+                }
+                try {
+                    const requestBody = {
+                        filename: filenameOfPrev, 
+                        bboxes: bboxesOfPrev || [], 
+                        next_filename: filenameToLoad
+                    };
+                    
+                    const response = await fetch('/api/read_entry', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(requestBody)
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error(`HTTP error! status: ${response.status}`, errorText);
+                        this.updateUI(); // Update UI even on error
+                        return;
+                    }
+                    
+                    const imageBlob = await response.blob();
+                    if (imageBlob.size === 0) {
+                        console.error("Received empty blob for image:", filenameToLoad);
+                        this.updateUI();
+                        return;
+                    }
+                    if (this.image.src && this.image.src.startsWith('blob:')) {
+                        URL.revokeObjectURL(this.image.src);
+                    }
+                    this.image.src = URL.createObjectURL(imageBlob); 
+
+                    const bboxesHeader = response.headers.get('bboxes');
+                    this.bboxes = bboxesHeader ? JSON.parse(bboxesHeader) : [];
+                    
+                    this.currentFilename = filenameToLoad;
+                    this.currentIndex = this.allFilenames.indexOf(filenameToLoad);
+                    
+                    this.bboxesHistory = [];
+                    // Removed userHasModifiedBboxes reset
+                    // Removed currentState logic
+                    
+                } catch (error) {
+                    console.error('Error fetching and loading image:', filenameToLoad, error);
+                    this.updateUI(); 
+                }
+            }
+            
             onImageLoad() {
                 // Set canvas size to match container
                 const container = this.canvas.parentElement;
@@ -258,6 +307,7 @@
                 // Draw image and bounding boxes
                 this.redraw();
                 this.updateImageSizeInfo();
+                this.updateUI(); 
             }
             
             resetView() {
@@ -466,6 +516,12 @@
                     if (imageX < 0 || imageX > this.image.width || imageY < 0 || imageY > this.image.height) {
                         this.maybeClick = false;
                         this.movedEnough = false;
+                        // Reset drawing state if click is outside image
+                        if (this.firstClick) {
+                            this.firstClick = null;
+                            this.currentBox = null;
+                            this.redraw(); // Redraw to remove preview box
+                        }
                         return;
                     }
                     if (!this.firstClick) {
@@ -483,6 +539,7 @@
                             this.pushHistory();
                             this.bboxes.push([Math.floor(left), Math.floor(top), Math.floor(right), Math.floor(bottom)]);
                             this.updateBboxInfo();
+                            this.updateUI(); // Update button states (e.g. clear button)
                         }
                         // Reset for next box
                         this.firstClick = null;
@@ -517,7 +574,8 @@
                 e.preventDefault();
                 
                 const pos = this.getMousePos(e);
-                if (this.bboxes.length === 0) return;
+                if (!this.image.src || this.bboxes.length === 0) return; 
+
                 let minDist = Infinity;
                 let minIdx = -1;
                 for (let i = 0; i < this.bboxes.length; i++) {
@@ -535,47 +593,60 @@
                         minIdx = i;
                     }
                 }
-                if (minIdx !== -1) {
+                const REMOVAL_THRESHOLD = 0.7; 
+                if (minIdx !== -1 && minDist < REMOVAL_THRESHOLD) {
                     this.pushHistory();
                     this.bboxes.splice(minIdx, 1);
                     this.redraw();
                     this.updateBboxInfo();
+                    this.updateUI(); // Update button states
                 }
             }
 
             async navigate(direction) {
-                // Auto-save before navigation
-                await this.save(false);
-                
-                try {
-                    const response = await fetch('/api/navigate', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({direction})
-                    });
-                    
-                    const result = await response.json();
-                    if (result.error) {
-                        console.error('Navigation error:', result.error);
-                        return;
+                if (this.allFilenames.length === 0) {
+                    this.updateUI(); // Ensure buttons are disabled if no images
+                    return;
+                }
+
+                const filenameToSave = this.currentFilename;
+                // Create a deep copy for saving, especially if bboxes can be complex objects
+                const bboxesToSave = JSON.parse(JSON.stringify(this.bboxes)); 
+
+                let newIndex = this.currentIndex;
+                if (direction === 'prev') {
+                    newIndex = Math.max(0, this.currentIndex - 1);
+                } else if (direction === 'next') {
+                    newIndex = Math.min(this.allFilenames.length - 1, this.currentIndex + 1);
+                }
+
+                if (newIndex !== this.currentIndex || !this.currentFilename) { // Also load if currentFilename is somehow null
+                    const filenameToLoad = this.allFilenames[newIndex];
+                    // Only proceed if filenameToLoad is valid
+                    if (filenameToLoad) {
+                         await this.fetchAndLoadImage(filenameToLoad, filenameToSave, bboxesToSave);
+                    } else {
+                        console.warn("Navigation resulted in undefined filename.");
+                        this.updateUI();
                     }
-                    
-                    await this.loadCurrentImage();
-                } catch (error) {
-                    console.error('Error navigating:', error);
+                } else {
+                     // console.log("Already at the start/end of the list or no change in index.");
+                     this.updateUI(); // Still update UI to reflect button states
                 }
             }
 
-            async save() {
+
+            async exportAnnotations() {
                 try {
-                    const response = await fetch('/api/save', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ann_bboxes: this.bboxes})
-                    });
-                    await response.json();
+                    const response = await fetch('/api/export', { method: 'GET' });
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const data = await response.json();
+                    alert(`Data exported to: ${data.export_path}`);
                 } catch (error) {
-                    console.error('Error saving:', error);
+                    console.error('Error exporting annotations:', error);
+                    alert('Error exporting annotations. See console for details.');
                 }
             }
 
@@ -591,27 +662,46 @@
                     this.bboxes = this.bboxesHistory.pop();
                     this.redraw();
                     this.updateBboxInfo();
+                    this.updateUI(); // Update button states
                 }
             }
 
             clearAll() {
-                if (this.bboxes.length > 0) this.pushHistory();
-                this.bboxes = [];
-                this.redraw();
-                this.updateBboxInfo();
+                if (this.bboxes.length > 0 || this.firstClick) { 
+                    if (this.bboxes.length > 0) this.pushHistory();
+                    this.bboxes = [];
+                    this.firstClick = null; 
+                    this.currentBox = null;
+                    this.redraw();
+                    this.updateBboxInfo();
+                    this.updateUI(); // Update button states
+                }
             }
 
             updateUI() {
-                const info = document.getElementById('imageInfo');
-                const status = document.getElementById('status');
-                if (this.currentData) {
-                    // Show full file path
-                    let fpath = this.currentData.filepath || '';
-                    info.textContent = `Image ${this.currentData.index + 1} of ${this.currentData.total}` + (fpath ? ` — ${fpath}` : '');
-                    status.textContent = `Status: ${this.currentData.state}`;
-                    status.className = `status ${this.currentData.state}`;
-                    this.updateBboxInfo();
+                const infoEl = document.getElementById('imageInfo');
+                
+                if (this.currentFilename && this.allFilenames.length > 0) {
+                    let fpath = this.currentFilename || '';
+                    infoEl.textContent = `Image ${this.currentIndex + 1} of ${this.allFilenames.length} — ${fpath}`;
+                } else if (this.allFilenames.length === 0 && this.currentIndex === -1) { // Check if initialization happened
+                    infoEl.textContent = 'No images loaded.';
+                } else if (!this.currentFilename && this.allFilenames.length > 0) {
+                     infoEl.textContent = 'Loading first image...';
                 }
+                 else {
+                    infoEl.textContent = 'Loading...'; 
+                }
+
+                this.updateBboxInfo();
+
+                // Update button states
+                const hasImages = this.allFilenames.length > 0;
+                document.getElementById('prevBtn').disabled = !hasImages || this.currentIndex <= 0;
+                document.getElementById('nextBtn').disabled = !hasImages || this.currentIndex >= this.allFilenames.length - 1;
+                document.getElementById('undoBtn').disabled = this.bboxesHistory.length === 0;
+                document.getElementById('clearBtn').disabled = this.bboxes.length === 0 && !this.firstClick;
+                document.getElementById('exportBtn').disabled = !hasImages;
             }
 
             updateBboxInfo() {
