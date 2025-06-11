@@ -55,12 +55,17 @@ async def read_entry(request):
     return FileResponse(path=filename, headers={"bboxes": json.dumps(bboxes)})
 
 
-def create_app():
+def create_app(db_path):
     """Create the Starlette application"""
-    data = get_data()
     global db
-    db = DatabaseAPI()
-    db.write_data(data)
+    if db_path is not None:
+        db = DatabaseAPI(db_path)
+    else:
+        db = DatabaseAPI()
+
+        # Initialize the database with some data
+        data = get_data()
+        db.write_data(data)
 
     app = Starlette(
         debug=True,
@@ -82,8 +87,9 @@ def main():
     parser = argparse.ArgumentParser(description="IAdet Annotation App")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
+    parser.add_argument("--db", default=None, type=int, help="Database file path, else get_data() will be called.")
     args = parser.parse_args()
-    app = create_app()
+    app = create_app(args.db)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
